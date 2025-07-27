@@ -1,9 +1,26 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "react-router-app",
+  "name": "image-serving",
   "compatibility_date": "2025-04-04",
   "main": "./workers/app.ts",
-  "vars": {
-    "VALUE_FROM_CLOUDFLARE": "Hello from Cloudflare"
+  "r2_buckets": [
+    {
+      "bucket_name": "image-serving",
+      "binding": "image_serving",
+      "preview_bucket_name": "image-serving-test",
+      "experimental_remote": true
+    }
+  ],
+  "env": {
+    "production": {
+      "vars": {
+        "ADMIN_PASSWORD": "Testing@1234"
+      }
+    },
+    "preview": {
+      "vars": {
+        "ADMIN_PASSWORD": "Preview@1234"
+      }
+    }
   }
 }
