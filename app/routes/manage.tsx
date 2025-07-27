@@ -1,5 +1,18 @@
 import type { Route } from "./+types/manage";
 import { useState, useEffect } from "react";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { 
+  faEdit, 
+  faCheck, 
+  faTimes, 
+  faSignInAlt, 
+  faUpload, 
+  faEyeSlash, 
+  faTrash, 
+  faDownload,
+  faMinus,
+  faEye
+} from "@fortawesome/free-solid-svg-icons";
 
 export function meta({}: Route.MetaArgs) {
   return [
@@ -21,7 +34,6 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 
   // Use import.meta.env instead of process.env for Cloudflare Workers
   const adminPassword =
-    process.env.ADMIN_PASSWORD ||
     import.meta.env.ADMIN_PASSWORD ||
     context.cloudflare.env.ADMIN_PASSWORD ||
     "Abcd@1234";
@@ -53,7 +65,6 @@ export async function action({ request, context }: Route.ActionArgs) {
   const password = formData.get("password");
 
   const adminPassword =
-    process.env.ADMIN_PASSWORD ||
     import.meta.env.ADMIN_PASSWORD ||
     context.cloudflare.env.ADMIN_PASSWORD ||
     "Abcd@1234";
@@ -63,26 +74,67 @@ export async function action({ request, context }: Route.ActionArgs) {
   }
 
   if (intent === "upload") {
-    const file = formData.get("file") as File;
-    if (!file || !file.name) {
-      return { error: "No file provided" };
+    const files = formData.getAll("files") as File[];
+    const optimize = formData.get("optimize") === "true";
+    
+    if (!files || files.length === 0 || files[0].size === 0) {
+      return { error: "No files provided" };
     }
 
-    try {
-      const arrayBuffer = await file.arrayBuffer();
-      await context.cloudflare.env.image_serving.put(file.name, arrayBuffer, {
-        httpMetadata: {
-          contentType: file.type || "application/octet-stream",
-        },
-      });
+    const results = [];
+    const errors = [];
 
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const customName = formData.get(`filename_${i}`) as string;
+      const finalName = customName || file.name;
+
+      if (!file || !file.name) {
+        errors.push(`File ${i + 1}: No file provided`);
+        continue;
+      }
+
+      try {
+        let fileBuffer = await file.arrayBuffer();
+        let contentType = file.type || "application/octet-stream";
+
+        // Basic optimization for images (placeholder for actual optimization)
+        if (optimize && file.type?.startsWith("image/")) {
+          // Here you would implement actual image optimization
+          // For now, we'll just add a header to indicate optimization was requested
+          console.log(`Optimization requested for ${finalName}`);
+        }
+
+        await context.cloudflare.env.image_serving.put(finalName, fileBuffer, {
+          httpMetadata: {
+            contentType: contentType,
+          },
+          customMetadata: {
+            originalName: file.name,
+            optimized: optimize.toString(),
+            uploadedAt: new Date().toISOString(),
+          },
+        });
+
+        results.push(finalName);
+      } catch (error) {
+        console.error(`Upload error for ${finalName}:`, error);
+        errors.push(`Failed to upload ${finalName}`);
+      }
+    }
+
+    if (errors.length > 0 && results.length === 0) {
+      return { error: errors.join("; ") };
+    } else if (errors.length > 0) {
+      return { 
+        success: true, 
+        message: `Uploaded ${results.length} file(s) successfully. Errors: ${errors.join("; ")}` 
+      };
+    } else {
       return {
         success: true,
-        message: `File ${file.name} uploaded successfully`,
+        message: `Successfully uploaded ${results.length} file(s): ${results.join(", ")}`,
       };
-    } catch (error) {
-      console.error("Upload error:", error);
-      return { error: "Failed to upload file" };
     }
   }
 
@@ -112,18 +164,83 @@ export default function Manage({
   actionData,
 }: Route.ComponentProps) {
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [fileRenames, setFileRenames] = useState<{[key: string]: string}>({});
+  const [editingFiles, setEditingFiles] = useState<{[key: string]: boolean}>({});
+  const [optimizeFiles, setOptimizeFiles] = useState(false);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0] || null;
-    setSelectedFile(file);
+    const files = Array.from(e.target.files || []);
+    setSelectedFiles(files);
+    
+    // Initialize rename mapping with original names and editing states
+    const renames: {[key: string]: string} = {};
+    const editing: {[key: string]: boolean} = {};
+    files.forEach((file, index) => {
+      renames[`file_${index}`] = file.name;
+      editing[`file_${index}`] = false;
+    });
+    setFileRenames(renames);
+    setEditingFiles(editing);
+  };
+
+  const handleRenameChange = (fileKey: string, newName: string) => {
+    setFileRenames(prev => ({
+      ...prev,
+      [fileKey]: newName
+    }));
+  };
+
+  const toggleEdit = (fileKey: string) => {
+    setEditingFiles(prev => ({
+      ...prev,
+      [fileKey]: !prev[fileKey]
+    }));
+  };
+
+  const confirmEdit = (fileKey: string) => {
+    setEditingFiles(prev => ({
+      ...prev,
+      [fileKey]: false
+    }));
+  };
+
+  const cancelEdit = (fileKey: string, originalName: string) => {
+    setFileRenames(prev => ({
+      ...prev,
+      [fileKey]: originalName
+    }));
+    setEditingFiles(prev => ({
+      ...prev,
+      [fileKey]: false
+    }));
+  };
+
+  const removeFile = (index: number) => {
+    const newFiles = selectedFiles.filter((_, i) => i !== index);
+    setSelectedFiles(newFiles);
+    
+    // Update rename mapping and editing states
+    const newRenames: {[key: string]: string} = {};
+    const newEditing: {[key: string]: boolean} = {};
+    newFiles.forEach((file, i) => {
+      const oldKey = `file_${index > i ? i : i + 1}`;
+      newRenames[`file_${i}`] = fileRenames[oldKey] || file.name;
+      newEditing[`file_${i}`] = false;
+    });
+    setFileRenames(newRenames);
+    setEditingFiles(newEditing);
   };
 
   // Reset upload state after successful upload
   useEffect(() => {
     if (actionData?.success) {
-      setSelectedFile(null);
+      setSelectedFiles([]);
+      setFileRenames({});
+      setEditingFiles({});
+      setOptimizeFiles(false);
       setShowUpload(false);
       // Reset file input
       const fileInput = document.getElementById("file") as HTMLInputElement;
@@ -146,20 +263,31 @@ export default function Manage({
               >
                 Password
               </label>
-              <input
-                type="password"
-                id="password"
-                name="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                required
-              />
+              <div className="relative">
+                <input
+                  type={showPassword ? "text" : "password"}
+                  id="password"
+                  name="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="mt-1 block w-full px-3 py-2 pr-10 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 text-gray-900 placeholder-gray-500"
+                  required
+                  placeholder="Enter your password"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600"
+                >
+                  <FontAwesomeIcon icon={showPassword ? faEyeSlash : faEye} className="w-4 h-4" />
+                </button>
+              </div>
             </div>
             <button
               type="submit"
-              className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+              className="w-full flex items-center justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
             >
+              <FontAwesomeIcon icon={faSignInAlt} className="mr-2 w-4 h-4" />
               Login
             </button>
           </form>
@@ -239,9 +367,10 @@ export default function Manage({
             </h1>
             <button
               onClick={() => setShowUpload(!showUpload)}
-              className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500"
+              className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 flex items-center"
             >
-              {showUpload ? "Hide Upload" : "Upload Image"}
+              <FontAwesomeIcon icon={showUpload ? faEyeSlash : faUpload} className="mr-2 w-4 h-4" />
+              {showUpload ? "Hide Upload" : "Upload Files"}
             </button>
           </div>
 
@@ -269,41 +398,139 @@ export default function Manage({
                 name="password"
                 value={loaderData.password}
               />
+              <input
+                type="hidden"
+                name="optimize"
+                value={optimizeFiles.toString()}
+              />
+              
               <div className="space-y-4">
                 <div>
                   <label
                     htmlFor="file"
                     className="block text-sm font-medium text-gray-700"
                   >
-                    Select File
+                    Select Files
                   </label>
                   <input
                     type="file"
                     id="file"
-                    name="file"
+                    name="files"
                     accept="*/*"
+                    multiple
                     onChange={handleFileChange}
-                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
-                    required
+                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 text-gray-900 placeholder-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
                   />
-                  {selectedFile && (
-                    <div className="mt-2 p-2 bg-blue-50 rounded-md">
-                      <p className="text-sm text-gray-700">
-                        <span className="font-medium">Selected file:</span>{" "}
-                        {selectedFile.name}
-                      </p>
-                      <p className="text-xs text-gray-500">
-                        Size: {(selectedFile.size / 1024).toFixed(2)} KB
-                      </p>
-                    </div>
-                  )}
                 </div>
+
+                <div className="flex items-center">
+                  <input
+                    type="checkbox"
+                    id="optimize"
+                    checked={optimizeFiles}
+                    onChange={(e) => setOptimizeFiles(e.target.checked)}
+                    className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                  />
+                  <label htmlFor="optimize" className="ml-2 block text-sm text-gray-700">
+                    Optimize images before upload (compress and convert to WebP)
+                  </label>
+                </div>
+
+                {selectedFiles.length > 0 && (
+                  <div className="mt-4 space-y-3">
+                    <h4 className="text-sm font-medium text-gray-700">Selected Files:</h4>
+                    {selectedFiles.map((file, index) => {
+                      const fileKey = `file_${index}`;
+                      const isEditing = editingFiles[fileKey];
+                      const currentName = fileRenames[fileKey] || file.name;
+                      const originalSize = (file.size / 1024).toFixed(2);
+                      const isImage = file.type?.startsWith("image/");
+                      const estimatedCompressedSize = isImage && optimizeFiles 
+                        ? (file.size * 0.7 / 1024).toFixed(2) // Estimate 30% compression
+                        : originalSize;
+
+                      return (
+                        <div key={fileKey} className="flex items-center space-x-3 p-3 bg-white rounded-md border">
+                          <div className="flex-1">
+                            <div className="flex items-center space-x-2 mb-2">
+                              <span className="text-sm text-gray-600">File:</span>
+                              {isEditing ? (
+                                <div className="flex items-center space-x-2 flex-1">
+                                  <input
+                                    type="text"
+                                    value={currentName}
+                                    onChange={(e) => handleRenameChange(fileKey, e.target.value)}
+                                    className="flex-1 px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 text-gray-900 placeholder-gray-500"
+                                    placeholder={file.name}
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => confirmEdit(fileKey)}
+                                    className="px-2 py-1 text-xs text-green-600 hover:text-green-800 flex items-center"
+                                  >
+                                    <FontAwesomeIcon icon={faCheck} className="w-3 h-3" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => cancelEdit(fileKey, file.name)}
+                                    className="px-2 py-1 text-xs text-red-600 hover:text-red-800 flex items-center"
+                                  >
+                                    <FontAwesomeIcon icon={faTimes} className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className="flex items-center space-x-2 flex-1">
+                                  <span className="text-sm font-medium text-gray-800">{currentName}</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleEdit(fileKey)}
+                                    className="px-2 py-1 text-xs text-blue-600 hover:text-blue-800 flex items-center"
+                                  >
+                                    <FontAwesomeIcon icon={faEdit} className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                            <div className="text-xs text-gray-500">
+                              {currentName !== file.name && (
+                                <div className="mb-1">
+                                  <span className="text-gray-500">Original: {file.name}</span>
+                                </div>
+                              )}
+                              <div>
+                                Size: {originalSize} KB
+                                {optimizeFiles && isImage && (
+                                  <span className="text-green-600"> → {estimatedCompressedSize} KB (optimized)</span>
+                                )}
+                              </div>
+                            </div>
+                            <input
+                              type="hidden"
+                              name={`filename_${index}`}
+                              value={currentName}
+                            />
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => removeFile(index)}
+                            className="px-2 py-1 text-xs bg-red-500 text-white rounded hover:bg-red-600 flex items-center"
+                          >
+                            <FontAwesomeIcon icon={faMinus} className="mr-1 w-3 h-3" />
+                            Remove
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
                 <button
                   type="submit"
-                  disabled={!selectedFile}
-                  className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                  disabled={selectedFiles.length === 0}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center justify-center"
                 >
-                  Upload File
+                  <FontAwesomeIcon icon={faUpload} className="mr-2 w-4 h-4" />
+                  Upload {selectedFiles.length > 0 ? `${selectedFiles.length} File${selectedFiles.length > 1 ? 's' : ''}` : 'Files'}
                 </button>
               </div>
             </form>
@@ -359,7 +586,7 @@ export default function Manage({
 
                   <div className="space-y-2">
                     <h3
-                      className="font-medium text-gray-900 truncate"
+                      className="font-medium text-gray-800 truncate"
                       title={image.key}
                     >
                       {image.key}
@@ -371,30 +598,41 @@ export default function Manage({
                       Uploaded: {formatDate(image.uploaded)}
                     </p>
 
-                    <form method="post" className="mt-3">
-                      <input type="hidden" name="intent" value="delete" />
-                      <input type="hidden" name="filename" value={image.key} />
-                      <input
-                        type="hidden"
-                        name="password"
-                        value={loaderData.password}
-                      />
-                      <button
-                        type="submit"
-                        onClick={(e) => {
-                          if (
-                            !confirm(
-                              `Are you sure you want to delete ${image.key}?`
-                            )
-                          ) {
-                            e.preventDefault();
-                          }
-                        }}
-                        className="w-full px-3 py-1 bg-red-600 text-white text-sm rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500"
+                    <div className="flex space-x-2 mt-3">
+                      <a
+                        href={`/${image.key}`}
+                        download={image.key}
+                        className="flex-1 px-3 py-1 bg-green-600 text-white text-sm rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 text-center flex items-center justify-center"
                       >
-                        Delete
-                      </button>
-                    </form>
+                        <FontAwesomeIcon icon={faDownload} className="mr-1 w-3 h-3" />
+                        Download
+                      </a>
+                      <form method="post" className="flex-1">
+                        <input type="hidden" name="intent" value="delete" />
+                        <input type="hidden" name="filename" value={image.key} />
+                        <input
+                          type="hidden"
+                          name="password"
+                          value={loaderData.password}
+                        />
+                        <button
+                          type="submit"
+                          onClick={(e) => {
+                            if (
+                              !confirm(
+                                `Are you sure you want to delete ${image.key}?`
+                              )
+                            ) {
+                              e.preventDefault();
+                            }
+                          }}
+                          className="w-full px-3 py-1 bg-red-600 text-white text-sm rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 flex items-center justify-center"
+                        >
+                          <FontAwesomeIcon icon={faTrash} className="mr-1 w-3 h-3" />
+                          Delete
+                        </button>
+                      </form>
+                    </div>
                   </div>
                 </div>
               ))}

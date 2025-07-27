@@ -13,3 +13,17 @@ body {
     color-scheme: dark;
   }
 }
+
+/* FontAwesome icon improvements to prevent FOUC */
+.svg-inline--fa {
+  display: inline-block;
+  font-size: inherit;
+  overflow: visible;
+  vertical-align: -0.125em;
+}
+
+/* Ensure consistent icon sizing */
+svg[data-icon] {
+  width: 1em;
+  height: 1em;
+}
