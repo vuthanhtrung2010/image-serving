@@ -52,8 +52,11 @@ export async function action({ request, context }: Route.ActionArgs) {
   const intent = formData.get("intent");
   const password = formData.get("password");
 
-  // Use import.meta.env instead of process.env for Cloudflare Workers
-  const adminPassword = import.meta.env.ADMIN_PASSWORD || "Abcd@1234";
+  const adminPassword =
+    process.env.ADMIN_PASSWORD ||
+    import.meta.env.ADMIN_PASSWORD ||
+    context.cloudflare.env.ADMIN_PASSWORD ||
+    "Abcd@1234";
 
   if (!password || password !== adminPassword) {
     return { error: "Invalid password" };
