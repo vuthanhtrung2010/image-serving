@@ -8,7 +8,7 @@
       "bucket_name": "image-serving",
       "binding": "image_serving",
       "preview_bucket_name": "image-serving-test",
-      "experimental_remote": true
+      "remote": true
     }
   ],
   "env": {

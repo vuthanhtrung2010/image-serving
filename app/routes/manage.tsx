@@ -1,5 +1,6 @@
 import type { Route } from "./+types/manage";
 import { useState, useEffect } from "react";
+import { cloudflareContext } from "~/context";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { 
   faEdit, 
@@ -29,13 +30,14 @@ interface ImageItem {
 }
 
 export async function loader({ request, context }: Route.LoaderArgs) {
+  const { env } = context.get(cloudflareContext);
   const url = new URL(request.url);
   const password = url.searchParams.get("password");
 
   // Use import.meta.env instead of process.env for Cloudflare Workers
   const adminPassword =
     import.meta.env.ADMIN_PASSWORD ||
-    context.cloudflare.env.ADMIN_PASSWORD ||
+    env.ADMIN_PASSWORD ||
     "Abcd@1234";
 
   if (!password || password !== adminPassword) {
@@ -44,7 +46,10 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 
   // List all objects in R2 bucket
   try {
-    const objects = await context.cloudflare.env.image_serving.list();
+    if (!env.image_serving) {
+      throw new Error("R2 bucket binding image_serving is not configured");
+    }
+    const objects = await env.image_serving.list();
     const images: ImageItem[] = objects.objects.map((obj: any) => ({
       key: obj.key,
       size: obj.size,
@@ -60,17 +65,22 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 }
 
 export async function action({ request, context }: Route.ActionArgs) {
+  const { env } = context.get(cloudflareContext);
   const formData = await request.formData();
   const intent = formData.get("intent");
   const password = formData.get("password");
 
   const adminPassword =
     import.meta.env.ADMIN_PASSWORD ||
-    context.cloudflare.env.ADMIN_PASSWORD ||
+    env.ADMIN_PASSWORD ||
     "Abcd@1234";
 
   if (!password || password !== adminPassword) {
     return { error: "Invalid password" };
+  }
+
+  if (!env.image_serving) {
+    return { error: "Storage bucket is not configured" };
   }
 
   if (intent === "upload") {
@@ -105,7 +115,7 @@ export async function action({ request, context }: Route.ActionArgs) {
           console.log(`Optimization requested for ${finalName}`);
         }
 
-        await context.cloudflare.env.image_serving.put(finalName, fileBuffer, {
+        await env.image_serving.put(finalName, fileBuffer, {
           httpMetadata: {
             contentType: contentType,
           },
@@ -145,7 +155,7 @@ export async function action({ request, context }: Route.ActionArgs) {
     }
 
     try {
-      await context.cloudflare.env.image_serving.delete(filename);
+      await env.image_serving.delete(filename);
       return {
         success: true,
         message: `File ${filename} deleted successfully`,
